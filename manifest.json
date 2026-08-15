@@ -1,0 +1,14 @@
+{
+  "name": "Figma to Claude Plugin",
+  "id": "figma-to-claude-plugin",
+  "api": "1.0.0",
+  "editorType": ["figma"],
+  "main": "dist/code.js",
+  "ui": "dist/ui.html",
+  "documentAccess": "dynamic-page",
+  "networkAccess": {
+    "allowedDomains": ["none"],
+    "reasoning": "All design operations, rendering and video encoding happen locally inside the plugin. The plugin never sends your document anywhere."
+  },
+  "permissions": []
+}
