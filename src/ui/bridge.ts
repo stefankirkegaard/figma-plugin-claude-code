@@ -47,7 +47,8 @@ export function connectBridge(): void {
 
   let next: WebSocket
   try {
-    next = new WebSocket(`ws://127.0.0.1:${state.bridgePort}`)
+    // Figma's manifest validator rejects IP literals, so this must be `localhost`.
+    next = new WebSocket(`ws://localhost:${state.bridgePort}`)
   } catch (error) {
     // A blocked or malformed URL never reaches `onerror`.
     update({ bridgeState: 'off', bridgeError: message(error) })

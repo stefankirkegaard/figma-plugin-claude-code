@@ -3,7 +3,7 @@
  * The bridge: an MCP server on stdio that relays commands to the Figma plugin
  * over a loopback WebSocket.
  *
- *   Claude Code ──stdio──► bridge ──ws://127.0.0.1:3055──► plugin panel ──► Figma
+ *   Claude Code ──stdio──► bridge ──ws://localhost:3055──► plugin panel ──► Figma
  *
  * Figma's plugin API only exists inside Figma, and a plugin cannot accept
  * incoming connections — so the panel dials out to this process and holds the

@@ -1,3 +1,4 @@
+import { createServer } from 'node:http'
 import { WebSocketServer } from 'ws'
 
 /** Envelope version. Bumped when the plugin/bridge message shape changes. */
@@ -7,6 +8,13 @@ export const PROTOCOL = 1
 const ALLOWED_ORIGINS = [undefined, '', 'null', 'https://www.figma.com', 'https://figma.com']
 
 /**
+ * Figma's manifest validator rejects IP literals, so the plugin has to dial
+ * `ws://localhost`. Which address that resolves to is up to the machine — IPv6
+ * first on most of them — so both loopback addresses are listened on.
+ */
+const LOOPBACK = ['127.0.0.1', '::1']
+
+/**
  * The link between the MCP server and whichever Figma plugin panel is open.
  *
  * The plugin dials in — a browser tab cannot be asked to listen — so this is a
@@ -14,11 +22,10 @@ const ALLOWED_ORIGINS = [undefined, '', 'null', 'https://www.figma.com', 'https:
  * open. Requests are correlated by id; the panel answers each one exactly once.
  */
 export class Channel {
-  constructor({ port = 3055, host = '127.0.0.1', log = () => {} } = {}) {
+  constructor({ port = 3055, log = () => {} } = {}) {
     this.port = port
-    this.host = host
     this.log = log
-    this.server = null
+    this.servers = []
     /** Every live panel, newest last. The newest is the one commands go to. */
     this.clients = []
     this.listenError = null
@@ -27,30 +34,50 @@ export class Channel {
     this.waiters = []
   }
 
-  listen() {
-    return new Promise((resolve, reject) => {
-      const server = new WebSocketServer({
-        host: this.host,
-        port: this.port,
-        maxPayload: 128 * 1024 * 1024,
-        verifyClient: ({ origin }) => {
-          // Blocks ordinary web pages, which always send their real origin.
-          if (ALLOWED_ORIGINS.includes(origin)) return true
-          this.log(`refused a connection from origin ${origin}`)
-          return false
-        },
-      })
+  async listen() {
+    const sockets = new WebSocketServer({ noServer: true, maxPayload: 128 * 1024 * 1024 })
 
-      server.on('error', (error) => {
-        this.listenError = error
-        reject(error)
+    const upgrade = (request, socket, head) => {
+      const origin = request.headers.origin
+      // Blocks ordinary web pages, which always send their real origin.
+      if (!ALLOWED_ORIGINS.includes(origin)) {
+        this.log(`refused a connection from origin ${origin}`)
+        socket.destroy()
+        return
+      }
+      sockets.handleUpgrade(request, socket, head, (client) => this.#adopt(client))
+    }
+
+    const failures = []
+    for (const host of LOOPBACK) {
+      try {
+        this.servers.push(await this.#bind(host, upgrade))
+        this.log(`listening on ws://${host === '::1' ? '[::1]' : host}:${this.port}`)
+      } catch (error) {
+        // A host without IPv6 is normal; both failing is not.
+        failures.push(error)
+      }
+    }
+
+    if (this.servers.length === 0) {
+      this.listenError = failures.find((error) => error.code === 'EADDRINUSE') ?? failures[0]
+      throw this.listenError
+    }
+  }
+
+  #bind(host, upgrade) {
+    return new Promise((resolve, reject) => {
+      const server = createServer((_request, response) => {
+        response.writeHead(426, { 'content-type': 'text/plain' })
+        response.end('This port speaks WebSocket to the Figma to Claude plugin panel.\n')
       })
-      server.on('listening', () => {
-        this.server = server
-        this.log(`listening on ws://${this.host}:${this.port}`)
-        resolve()
+      server.on('upgrade', upgrade)
+      server.once('error', reject)
+      server.listen(this.port, host, () => {
+        server.removeListener('error', reject)
+        server.on('error', (error) => this.log(`server error: ${error.message}`))
+        resolve(server)
       })
-      server.on('connection', (socket) => this.#adopt(socket))
     })
   }
 
@@ -124,8 +151,8 @@ export class Channel {
 
   status() {
     return {
-      listening: this.server !== null,
-      url: `ws://${this.host}:${this.port}`,
+      listening: this.servers.length > 0,
+      url: `ws://localhost:${this.port}`,
       panels: this.clients.length,
       document: this.client?.document ?? null,
       page: this.client?.page ?? null,
@@ -153,7 +180,7 @@ export class Channel {
     if (this.listenError) {
       return this.listenError.code === 'EADDRINUSE'
         ? `Port ${this.port} is already taken — another copy of the bridge is probably running. Close it, or set FIGMA_BRIDGE_PORT to a free port in both .mcp.json and the plugin's Claude tab.`
-        : `The bridge could not open ws://${this.host}:${this.port}: ${this.listenError.message}`
+        : `The bridge could not open ws://localhost:${this.port}: ${this.listenError.message}`
     }
     return 'No Figma panel is connected. In Figma, run Plugins → Development → Figma to Claude — the panel connects on its own.'
   }
@@ -176,6 +203,6 @@ export class Channel {
 
   close() {
     for (const client of this.clients) client.socket.close()
-    this.server?.close()
+    for (const server of this.servers) server.close()
   }
 }

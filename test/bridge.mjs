@@ -33,10 +33,14 @@ function check(label, condition, detail = '') {
   }
 }
 
-/** A stand-in for the plugin panel: connects, says hello, answers commands. */
+/**
+ * A stand-in for the plugin panel: connects, says hello, answers commands.
+ * It dials `localhost` exactly as the real panel does — Figma's manifest
+ * validator rejects IP literals, so that is the only address in play.
+ */
 function fakePanel(port, respond) {
   return new Promise((resolve, reject) => {
-    const socket = new WebSocket(`ws://127.0.0.1:${port}`)
+    const socket = new WebSocket(`ws://localhost:${port}`)
     const seen = []
 
     socket.on('open', () => {
@@ -99,6 +103,31 @@ try {
 
   const refused = await client.callTool({ name: 'figma_get_selection', arguments: {} })
   check('other tools explain how to connect', refused.isError === true && /Plugins/.test(refused.content[0].text), refused.content[0].text)
+
+  console.log('\nLoopback')
+  for (const host of ['127.0.0.1', '[::1]']) {
+    const reachable = await new Promise((resolve) => {
+      const probe = new WebSocket(`ws://${host}:${PORT}`)
+      probe.on('open', () => {
+        probe.close()
+        resolve(true)
+      })
+      probe.on('error', () => resolve(false))
+    })
+    // A machine without IPv6 legitimately has no ::1 to bind.
+    if (host === '[::1]' && !reachable) console.log('  skip ::1 — no IPv6 on this machine')
+    else check(`${host} accepts a connection`, reachable)
+  }
+
+  const refusedOrigin = await new Promise((resolve) => {
+    const probe = new WebSocket(`ws://localhost:${PORT}`, { origin: 'https://evil.example' })
+    probe.on('open', () => {
+      probe.close()
+      resolve(false)
+    })
+    probe.on('error', () => resolve(true))
+  })
+  check('a web page origin is refused', refusedOrigin)
 
   console.log('\nWith a panel connected')
   panel = await fakePanel(PORT, (request) => {

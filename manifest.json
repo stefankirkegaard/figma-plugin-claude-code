@@ -2,17 +2,14 @@
   "name": "Figma to Claude",
   "id": "figma-to-claude-plugin",
   "api": "1.0.0",
-  "editorType": ["figma"],
+  "editorType": [
+    "figma"
+  ],
   "main": "dist/code.js",
   "ui": "dist/ui.html",
   "documentAccess": "dynamic-page",
   "networkAccess": {
     "allowedDomains": [
-      "ws://127.0.0.1:3055",
-      "ws://127.0.0.1:3056",
-      "ws://127.0.0.1:3057",
-      "ws://127.0.0.1:3058",
-      "ws://127.0.0.1:3059",
       "ws://localhost:3055",
       "ws://localhost:3056",
       "ws://localhost:3057",

@@ -132,7 +132,7 @@ running locally — the plugin is only ever one end of the wire.
 ### The bridge
 
 ```
-Claude Code ──stdio──► bridge/server.mjs ──ws://127.0.0.1:3055──► panel ──► Figma
+Claude Code ──stdio──► bridge/server.mjs ──ws://localhost:3055──► panel ──► Figma
 ```
 
 A Figma plugin cannot accept incoming connections and has no filesystem, and
@@ -151,6 +151,11 @@ can only reach the document you have open, and closing the panel cuts the link.
 And because the bridge is the WebSocket *server*, a second one cannot start on
 the same port; the panel's Claude tab has a port field for that case, and the
 manifest allows 3055–3059.
+
+Figma's manifest validator rejects IP literals — `ws://127.0.0.1:3055` fails to
+load with "must be a valid URL" — so the panel dials `ws://localhost`. Which
+address that resolves to is the machine's business, and IPv6 usually wins, so
+the bridge listens on both `127.0.0.1` and `::1`.
 
 ### Motion
 
