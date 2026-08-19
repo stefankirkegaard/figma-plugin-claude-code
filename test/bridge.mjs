@@ -8,7 +8,7 @@
  *
  * Run with: npm run test:bridge
  */
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -65,6 +65,12 @@ const PNG_PIXEL =
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
 
 const responses = {
+  create_frame: (params) => ({ id: '2:1', name: params.name, type: 'FRAME', width: params.width, height: params.height, parentId: params.parentId ?? '0:1' }),
+  create_text: (params) => ({ id: '2:2', name: params.characters, type: 'TEXT', parentId: params.parentId ?? '0:1' }),
+  create_rectangle: () => ({ id: '2:3', name: 'Rectangle', type: 'RECTANGLE' }),
+  place_image: (params) => ({ id: '2:4', name: params.name ?? 'Image', type: 'RECTANGLE', base64Length: String(params.base64 ?? '').length }),
+  set_text: () => 'Set the text of "Headline"',
+  delete_nodes: () => 'Deleted 2 layers: A, B',
   status: () => ({ document: 'Test Doc', page: 'Page 1', selection: { pageName: 'Page 1', nodes: [] } }),
   get_selection: () => ({ pageName: 'Page 1', nodes: [{ id: '1:2', name: 'Card', type: 'FRAME' }] }),
   get_design_spec: () => '# Test Doc — Page 1\n\n- **Card** (frame) — 320×200',
@@ -95,6 +101,7 @@ try {
   check('exposes the read tools', ['figma_get_selection', 'figma_get_page', 'figma_get_design_spec'].every((name) => names.includes(name)), names.join(', '))
   check('exposes the editing tools', ['figma_rename', 'figma_set_color', 'figma_replace_text'].every((name) => names.includes(name)))
   check('exposes export and motion', names.includes('figma_export') && names.includes('figma_render_motion'))
+  check('exposes the creation tools', ['figma_create_frame', 'figma_create_text', 'figma_create_rectangle', 'figma_place_image', 'figma_set_text', 'figma_delete_nodes'].every((name) => names.includes(name)), names.join(', '))
   check('every tool is described', tools.every((tool) => (tool.description ?? '').length > 20))
 
   console.log('\nWithout a panel')
@@ -164,6 +171,35 @@ try {
   const rendered = await client.callTool({ name: 'figma_render_motion', arguments: { frameIds: ['1:2', '1:3'], format: 'GIF' } })
   check('a render lands on disk', readFileSync(path.join(outDir, 'motion.gif')).length > 0)
   check('the render is reported with its frame count', rendered.content[0].text.includes('12 frames'))
+
+  console.log('\nCreating')
+  const frame = await client.callTool({ name: 'figma_create_frame', arguments: { name: 'Test v1', width: 1440, height: 900 } })
+  check('a frame comes back with its id', frame.content[0].text.includes('"id": "2:1"') && frame.content[0].text.includes('"name": "Test v1"'))
+
+  await client.callTool({ name: 'figma_create_text', arguments: { characters: 'Danmarks mest specialiserede skibutik', fontSize: 48, parentId: '2:1' } })
+  const textCall = panel.seen.find((request) => request.command === 'create_text')
+  check('text carries its parent and defaults', textCall.params.parentId === '2:1' && textCall.params.fontFamily === 'Inter')
+
+  console.log('\nImages')
+  const pngFile = path.join(outDir, 'source.png')
+  writeFileSync(pngFile, Buffer.from(PNG_PIXEL, 'base64'))
+  await client.callTool({ name: 'figma_place_image', arguments: { filePath: pngFile, x: 10, y: 20 } })
+  const imageCall = panel.seen.find((request) => request.command === 'place_image')
+  check('a local PNG reaches the panel as base64', imageCall.params.base64 === PNG_PIXEL)
+
+  const webp = path.join(outDir, 'fake.webp')
+  writeFileSync(webp, Buffer.concat([Buffer.from('RIFF'), Buffer.alloc(4), Buffer.from('WEBP'), Buffer.alloc(16)]))
+  const rejected = await client.callTool({ name: 'figma_place_image', arguments: { filePath: webp } })
+  check('WebP is rejected by name', rejected.isError === true && /WebP/.test(rejected.content[0].text), rejected.content[0].text)
+
+  // The live check: a CDN that would serve AVIF to a browser must serve JPEG here.
+  const liveUrl = 'https://steepdeep.dk/cdn/shop/files/110496-004-a-ghost-max-4-mens-max-cushion-road-running-shoe_jpg_384x384.avif?v=1785925494'
+  const live = await client.callTool({ name: 'figma_place_image', arguments: { url: liveUrl, width: 320 } })
+  if (live.isError && /fetch|ENOTFOUND|ETIMEDOUT|EAI_AGAIN|HTTP 5/i.test(live.content[0].text)) {
+    console.log('  skip live fetch — no network')
+  } else {
+    check('an AVIF url negotiates down to JPEG', live.content[0].text.includes('"mime": "image/jpeg"'), live.content[0].text)
+  }
 
   console.log('\nFailures')
   const failed = await client.callTool({ name: 'figma_rename', arguments: { pattern: 'x' } })

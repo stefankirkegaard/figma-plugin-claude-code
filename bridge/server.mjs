@@ -21,11 +21,26 @@ const outDir = path.resolve(process.env.FIGMA_BRIDGE_OUT_DIR ?? path.join(proces
 /** stdout carries the MCP protocol, so every log line goes to stderr. */
 const log = (message) => process.stderr.write(`[figma-bridge] ${message}\n`)
 
+/**
+ * Run by hand (`npm run bridge`) there is nobody on stdio to read an excuse, so
+ * a bridge that cannot listen is simply a failure. As an MCP child process it
+ * is the opposite: staying up lets every tool explain the problem in place.
+ */
+const standalone = process.argv.includes('--standalone')
+
 const channel = new Channel({ port, log })
 try {
   await channel.listen()
 } catch (error) {
-  // Keep serving: the tools explain the problem far better than a dead process.
+  if (standalone) {
+    log(`cannot listen on port ${port}: ${error.message}`)
+    log(
+      error.code === 'EADDRINUSE'
+        ? `Another bridge is already running on ${port}. Close it, or set FIGMA_BRIDGE_PORT to 3056.`
+        : 'The bridge cannot accept connections, so the plugin has nothing to connect to.',
+    )
+    process.exit(1)
+  }
   log(`could not listen on port ${port}: ${error.message}`)
 }
 
@@ -43,7 +58,11 @@ const server = new McpServer(
 registerTools(server, channel, { outDir, log })
 
 await server.connect(new StdioServerTransport())
-log(`ready — exports will be written to ${outDir}`)
+log(
+  standalone
+    ? `ready on ws://localhost:${port} — open the plugin in Figma`
+    : `ready — exports will be written to ${outDir}`,
+)
 
 const shutdown = () => {
   channel.close()

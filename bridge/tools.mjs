@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { z } from 'zod'
 
@@ -10,6 +10,59 @@ const RENDER_TIMEOUT_MS = 15 * 60_000
 const EXPORT_TIMEOUT_MS = 5 * 60_000
 
 const EASINGS = ['linear', 'easeIn', 'easeOut', 'easeInOut', 'easeOutBack', 'easeOutBounce']
+
+/** Figma's createImage takes these and nothing else. */
+const IMAGE_SIGNATURES = [
+  { mime: 'image/png', test: (b) => b.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) },
+  { mime: 'image/jpeg', test: (b) => b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff },
+  { mime: 'image/gif', test: (b) => b.subarray(0, 3).toString() === 'GIF' },
+]
+
+const MAX_IMAGE_BYTES = 20 * 1024 * 1024
+
+/**
+ * Servers hand back AVIF or WebP when a browser asks for it, and Figma can read
+ * neither — so the fetch asks only for what Figma accepts and the bytes are
+ * checked rather than trusted.
+ */
+function identifyImage(buffer) {
+  const match = IMAGE_SIGNATURES.find((signature) => signature.test(buffer))
+  if (match) return match.mime
+
+  const head = buffer.subarray(0, 16)
+  const actual = head.subarray(8, 12).toString() === 'WEBP'
+    ? 'WebP'
+    : head.subarray(4, 12).toString() === 'ftypavif'
+      ? 'AVIF'
+      : head.subarray(0, 5).toString().includes('<')
+        ? 'HTML or SVG'
+        : 'an unrecognised format'
+  throw new Error(`Figma reads PNG, JPG and GIF; that URL returned ${actual}.`)
+}
+
+async function loadImage({ url, filePath }) {
+  if (filePath) {
+    const buffer = await readFile(filePath)
+    return { buffer, mime: identifyImage(buffer) }
+  }
+  if (!url) throw new Error('Pass either url or filePath.')
+
+  const response = await fetch(url, {
+    headers: {
+      // Asking only for what Figma reads makes content-negotiating CDNs comply.
+      accept: 'image/png,image/jpeg,image/gif',
+      'user-agent': 'figma-to-claude/0.1',
+    },
+    redirect: 'follow',
+  })
+  if (!response.ok) throw new Error(`${url} returned HTTP ${response.status}.`)
+
+  const buffer = Buffer.from(await response.arrayBuffer())
+  if (buffer.length > MAX_IMAGE_BYTES) {
+    throw new Error(`That image is ${(buffer.length / 1048576).toFixed(1)} MB; the limit is 20 MB.`)
+  }
+  return { buffer, mime: identifyImage(buffer) }
+}
 
 const nodeIds = z
   .array(z.string())
@@ -198,6 +251,104 @@ export function registerTools(server, channel, { outDir, log }) {
     'Show a toast inside Figma. Useful to tell the user what you just did or are about to do.',
     { message: z.string(), error: z.boolean().default(false) },
     async (args) => text(await call('notify', args)),
+  )
+
+
+  /* ------------------------------------------------------------- creating */
+
+  tool(
+    'figma_create_frame',
+    'Create a frame on the page, or inside another frame with parentId. The unit of layout — make one, then fill it with text, rectangles and images.',
+    {
+      name: z.string().default('Frame'),
+      x: z.number().default(0).describe('Position, relative to the parent.'),
+      y: z.number().default(0),
+      width: z.number().positive().default(400),
+      height: z.number().positive().default(300),
+      fill: z.string().optional().describe('Hex background, e.g. "#0b0b0c". Defaults to white.'),
+      cornerRadius: z.number().min(0).optional(),
+      layout: z.enum(['NONE', 'HORIZONTAL', 'VERTICAL']).default('NONE').describe('Auto layout direction.'),
+      gap: z.number().min(0).default(0).describe('Auto layout item spacing.'),
+      padding: z.number().min(0).default(0).describe('Auto layout padding, all sides.'),
+      parentId: z.string().optional().describe('Frame or group to create this inside.'),
+    },
+    async (args) => json(await call('create_frame', args)),
+  )
+
+  tool(
+    'figma_create_text',
+    'Create a text layer. Give a width to get a fixed-width paragraph that grows downwards; leave it out for a single auto-sizing line.',
+    {
+      characters: z.string().describe('The text itself.'),
+      x: z.number().default(0),
+      y: z.number().default(0),
+      width: z.number().positive().optional().describe('Fixed width; height then follows the content.'),
+      fontSize: z.number().positive().default(16),
+      fontFamily: z.string().default('Inter').describe('Must be a font Figma can load, e.g. Inter.'),
+      fontStyle: z.string().default('Regular').describe('e.g. Regular, Medium, Semi Bold, Bold.'),
+      lineHeight: z.number().positive().optional().describe('Percent, e.g. 140.'),
+      align: z.enum(['LEFT', 'CENTER', 'RIGHT', 'JUSTIFIED']).optional(),
+      color: z.string().optional().describe('Hex, e.g. "#111111".'),
+      name: z.string().optional().describe('Layer name. Defaults to the text.'),
+      parentId: z.string().optional(),
+    },
+    async (args) => json(await call('create_text', args)),
+  )
+
+  tool(
+    'figma_create_rectangle',
+    'Create a rectangle — backgrounds, dividers, colour blocks, placeholders.',
+    {
+      name: z.string().default('Rectangle'),
+      x: z.number().default(0),
+      y: z.number().default(0),
+      width: z.number().positive().default(100),
+      height: z.number().positive().default(100),
+      fill: z.string().optional().describe('Hex, e.g. "#e5e5e5".'),
+      cornerRadius: z.number().min(0).optional(),
+      parentId: z.string().optional(),
+    },
+    async (args) => json(await call('create_rectangle', args)),
+  )
+
+  tool(
+    'figma_place_image',
+    'Put a real image on the canvas from a URL or a local file. The bridge fetches the bytes, so the image can come from any site. Give width or height alone to keep the aspect ratio.',
+    {
+      url: z.string().optional().describe('Image URL. PNG, JPG or GIF — Figma cannot read WebP or AVIF.'),
+      filePath: z.string().optional().describe('Local image file, as an alternative to url.'),
+      x: z.number().default(0),
+      y: z.number().default(0),
+      width: z.number().positive().optional().describe('Omit both width and height for the image\'s own size.'),
+      height: z.number().positive().optional(),
+      scaleMode: z.enum(['FILL', 'FIT', 'CROP', 'TILE']).default('FILL'),
+      cornerRadius: z.number().min(0).optional(),
+      name: z.string().optional(),
+      parentId: z.string().optional(),
+    },
+    async (args) => {
+      const { buffer, mime } = await loadImage(args)
+      const result = await call(
+        'place_image',
+        { ...args, base64: buffer.toString('base64') },
+        { timeoutMs: EXPORT_TIMEOUT_MS },
+      )
+      return json({ ...result, bytes: buffer.length, mime })
+    },
+  )
+
+  tool(
+    'figma_set_text',
+    'Replace the whole content of one text layer. Fonts are loaded automatically.',
+    { nodeId: z.string(), characters: z.string() },
+    async (args) => text(await call('set_text', args)),
+  )
+
+  tool(
+    'figma_delete_nodes',
+    'Delete layers. Use it to clear a frame before rebuilding it.',
+    { nodeIds: z.array(z.string()).describe('Layer ids to delete.') },
+    async (args) => text(await call('delete_nodes', args)),
   )
 
   /* ------------------------------------------------------------ exporting */
