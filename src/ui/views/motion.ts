@@ -1,10 +1,9 @@
-import type { Easing, MotionMode, Track, TrackProp } from '../../shared/types'
+import type { Easing, ExportedFile, MotionMode, Track, TrackProp } from '../../shared/types'
 import { button, clear, field, formatBytes, h, numberInput, row, select } from '../dom'
 import { evenSize, fitWithin, FrameRenderer } from '../encode/frames'
 import { encodeGif } from '../encode/gif'
 import { encodeVideo, videoEncodingSupported } from '../encode/mp4'
 import { makeZip } from '../encode/zip'
-import { offerDownload } from '../download'
 import { renderStore } from '../render-store'
 import { notify, send, state, update, type OutputFormat } from '../state'
 import { section, type View } from './design'
@@ -643,11 +642,16 @@ function buildPreset(preset: Preset, nodeId: string, nodeName: string, duration:
  * Turns the rendered frames into the chosen deliverable. Called by the message
  * router once the sandbox reports that every frame has arrived.
  */
-export async function exportRenderedFrames(): Promise<void> {
+/**
+ * Encodes the frames of the last render into the chosen output format and
+ * returns the finished file. Callers decide what to do with it: the panel
+ * offers it as a download, the bridge hands it to Claude.
+ */
+export async function exportRenderedFrames(): Promise<ExportedFile | null> {
   const store = renderStore.store
   if (!store || store.count === 0) {
     notify('The render produced no frames.', 'error')
-    return
+    return null
   }
 
   const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')
@@ -661,9 +665,8 @@ export async function exportRenderedFrames(): Promise<void> {
         files.push({ name: `frame-${String(index).padStart(4, '0')}.png`, bytes: await store.bytesAt(index) })
         update({ progress: { stage: 'encoding', done: index + 1, total: store.count } })
       }
-      offerDownload(makeZip(files), `figma-motion-${stamp}.zip`, 'application/zip')
-      notify(`Exported ${files.length} PNG frames.`)
-      return
+      notify(`Encoded ${files.length} PNG frames.`)
+      return { name: `figma-motion-${stamp}.zip`, bytes: makeZip(files), mime: 'application/zip' }
     }
 
     if (state.outputFormat === 'GIF') {
@@ -683,9 +686,8 @@ export async function exportRenderedFrames(): Promise<void> {
         colors: 256,
         onProgress: (done, total) => update({ progress: { stage: 'encoding', done, total } }),
       })
-      offerDownload(bytes, `figma-motion-${stamp}.gif`, 'image/gif')
       notify(`GIF ready — ${formatBytes(bytes.length)}, ${store.count} frames at ${state.fps} fps.`)
-      return
+      return { name: `figma-motion-${stamp}.gif`, bytes, mime: 'image/gif' }
     }
 
     // MP4: codecs need even dimensions and cannot carry alpha, so the matte
@@ -698,8 +700,8 @@ export async function exportRenderedFrames(): Promise<void> {
       quality: state.quality,
       onProgress: (done, total) => update({ progress: { stage: 'encoding', done, total } }),
     })
-    offerDownload(result.bytes, `figma-motion-${stamp}.mp4`, 'video/mp4')
     notify(`MP4 ready — ${result.codecLabel}, ${formatBytes(result.bytes.length)}.`)
+    return { name: `figma-motion-${stamp}.mp4`, bytes: result.bytes, mime: 'video/mp4' }
   } finally {
     update({ progress: null })
   }

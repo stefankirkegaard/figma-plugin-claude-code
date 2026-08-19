@@ -2,15 +2,18 @@ import type { UiToMain } from '../shared/types'
 import * as assets from './assets'
 import * as design from './design'
 import * as motion from './motion'
+import { handleRpc } from './rpc'
 import { selectionToMarkdown } from './serialize'
 import { fail, post, selectionState, summarize } from './util'
 
 figma.showUI(__html__, { width: 480, height: 680, themeColors: true })
 
 const pushSelection = () => post({ type: 'selection', state: selectionState() })
+const pushContext = () => post({ type: 'context', document: figma.root.name, page: figma.currentPage.name })
 
 figma.on('selectionchange', pushSelection)
 figma.on('currentpagechange', () => {
+  pushContext()
   pushSelection()
   post({ type: 'motion:frames', frames: motion.listFrames() })
 })
@@ -30,6 +33,7 @@ figma.ui.onmessage = async (message: UiToMain) => {
   try {
     switch (message.type) {
       case 'ui:ready':
+        pushContext()
         pushSelection()
         post({ type: 'motion:frames', frames: motion.listFrames() })
         break
@@ -115,6 +119,11 @@ figma.ui.onmessage = async (message: UiToMain) => {
 
       case 'motion:cancel':
         motion.cancelRender()
+        break
+
+      case 'rpc:call':
+        // The bridge answers its own errors, so this never reaches the catch below.
+        await handleRpc(message.request)
         break
 
       case 'motion:zoomTo': {

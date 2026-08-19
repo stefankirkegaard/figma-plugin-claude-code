@@ -486,3 +486,51 @@ select.input {
   font-size: 10px;
   flex: none;
 }
+
+/* ---------------------------------------------------------------- claude */
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-dim);
+  flex: none;
+}
+
+.status-dot.connected {
+  background: #14ae5c;
+  box-shadow: 0 0 0 3px rgb(20 174 92 / 18%);
+}
+
+.status-dot.connecting {
+  background: #ffb800;
+  animation: pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  50% {
+    opacity: 0.25;
+  }
+}
+
+.status-label {
+  font-weight: 600;
+}
+
+.error-text {
+  color: var(--danger);
+}
+
+.activity .list-item {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+}
+
+.steps {
+  margin: 0;
+  padding-left: 16px;
+  color: var(--text-dim);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
