@@ -117,6 +117,28 @@ export interface FrameInfo {
   }[]
 }
 
+/* ------------------------------------------------------------------ bridge */
+
+/**
+ * A command from the MCP bridge. The UI answers the ones that need its
+ * encoders and forwards everything else to the sandbox, which is the only side
+ * with a Figma API.
+ */
+export interface RpcRequest {
+  id: string
+  command: string
+  params: Record<string, unknown>
+}
+
+export interface RpcResult {
+  id: string
+  ok: boolean
+  result?: unknown
+  error?: string
+}
+
+export type BridgeState = 'off' | 'connecting' | 'connected'
+
 /* ---------------------------------------------------------------- messages */
 
 export type UiToMain =
@@ -139,6 +161,7 @@ export type UiToMain =
   | { type: 'motion:render'; request: RenderRequest }
   | { type: 'motion:cancel' }
   | { type: 'motion:zoomTo'; nodeId: string }
+  | { type: 'rpc:call'; request: RpcRequest }
 
 export type MainToUi =
   | { type: 'selection'; state: SelectionState }
@@ -154,3 +177,6 @@ export type MainToUi =
   | { type: 'clipboard'; text: string; label: string }
   | { type: 'error'; message: string }
   | { type: 'busy'; busy: boolean; label?: string }
+  | { type: 'context'; document: string; page: string }
+  | { type: 'rpc:result'; response: RpcResult }
+  | { type: 'rpc:progress'; id: string; label: string; done: number; total: number }

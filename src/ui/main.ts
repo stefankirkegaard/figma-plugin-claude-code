@@ -1,4 +1,6 @@
 import type { MainToUi } from '../shared/types'
+import { connectBridge, handleRpcResult, pushBridgeContext } from './bridge'
+import { dispatch } from './bus'
 import { clear, formatBytes, h } from './dom'
 import { copyText, mountDownloads, offerDownload } from './download'
 import { FrameStore } from './encode/frames'
@@ -6,16 +8,19 @@ import { makeZip } from './encode/zip'
 import { renderStore } from './render-store'
 import { notify, send, state, subscribe, update, type Tab } from './state'
 import { createAssetsView } from './views/assets'
+import { createConnectView } from './views/connect'
 import { createDesignView, type View } from './views/design'
 import { createMotionView, exportRenderedFrames } from './views/motion'
 
 const views: Record<Tab, View> = {
+  claude: createConnectView(),
   design: createDesignView(),
   assets: createAssetsView(),
   motion: createMotionView(),
 }
 
 const TABS: { id: Tab; label: string }[] = [
+  { id: 'claude', label: 'Claude' },
   { id: 'design', label: 'Design' },
   { id: 'assets', label: 'Assets' },
   { id: 'motion', label: 'Motion' },
@@ -71,9 +76,21 @@ window.onmessage = (event: MessageEvent) => {
 }
 
 function handle(message: MainToUi): void {
+  // The bridge awaits specific replies; every message is offered to it first.
+  dispatch(message)
+
   switch (message.type) {
     case 'selection':
       update({ selection: message.state })
+      break
+
+    case 'context':
+      update({ documentName: message.document })
+      pushBridgeContext()
+      break
+
+    case 'rpc:result':
+      handleRpcResult(message.response)
       break
 
     case 'assets:list': {
@@ -137,8 +154,11 @@ function handle(message: MainToUi): void {
       if (message.cancelled) {
         const count = renderStore.store?.count ?? 0
         notify(count > 0 ? `Render cancelled after ${count} frames.` : 'Render cancelled.')
-      } else {
-        void exportRenderedFrames()
+      } else if (renderStore.owner === 'panel') {
+        // A bridge render is encoded by the bridge, which needs the bytes back.
+        void exportRenderedFrames().then((file) => {
+          if (file) offerDownload(file.bytes, file.name, file.mime)
+        })
       }
       break
 
@@ -167,3 +187,6 @@ function handle(message: MainToUi): void {
 send({ type: 'ui:ready' })
 send({ type: 'assets:scan' })
 render()
+
+// Dial the bridge straight away: opening the panel is the whole connection step.
+connectBridge()

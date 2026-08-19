@@ -1,4 +1,5 @@
 import type {
+  BridgeState,
   ExportFormat,
   FrameInfo,
   MotionMode,
@@ -9,7 +10,7 @@ import type {
   UiToMain,
 } from '../shared/types'
 
-export type Tab = 'design' | 'assets' | 'motion'
+export type Tab = 'claude' | 'design' | 'assets' | 'motion'
 export type OutputFormat = 'GIF' | 'MP4' | 'PNG_SEQUENCE'
 
 export interface RenderProgress {
@@ -20,7 +21,13 @@ export interface RenderProgress {
 
 export interface AppState {
   tab: Tab
+  documentName: string
   selection: SelectionState
+  /** Bridge to the MCP server, and the last few commands it ran. */
+  bridgeState: BridgeState
+  bridgePort: number
+  bridgeError: string | null
+  bridgeLog: string[]
   assets: NodeSummary[]
   assetSelection: Set<string>
   assetFormat: ExportFormat
@@ -49,8 +56,13 @@ export interface AppState {
 }
 
 export const state: AppState = {
-  tab: 'design',
+  tab: 'claude',
+  documentName: '',
   selection: { pageName: '', nodes: [] },
+  bridgeState: 'connecting',
+  bridgePort: 3055,
+  bridgeError: null,
+  bridgeLog: [],
   assets: [],
   assetSelection: new Set(),
   assetFormat: 'PNG',

@@ -8,7 +8,9 @@
     "watch": "node build.mjs --watch",
     "typecheck": "tsc --noEmit",
     "test": "node test/run.mjs",
-    "test:video": "node test/video.mjs"
+    "test:video": "node test/video.mjs",
+    "test:bridge": "node test/bridge.mjs",
+    "bridge": "node bridge/server.mjs"
   },
   "devDependencies": {
     "@figma/plugin-typings": "^1.101.0",
@@ -18,6 +20,8 @@
     "typescript": "^5.7.0"
   },
   "dependencies": {
-    "mp4-muxer": "^5.2.2"
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "mp4-muxer": "^5.2.2",
+    "ws": "^8.21.3"
   }
 }
