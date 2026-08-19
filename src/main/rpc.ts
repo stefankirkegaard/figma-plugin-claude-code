@@ -3,11 +3,14 @@ import * as assets from './assets'
 import * as design from './design'
 import * as motion from './motion'
 import { selectionToMarkdown } from './serialize'
-import { post, selectionState, summarize, walk } from './util'
+import { hexToRgb, loadFontsFor, post, selectionState, summarize, walk } from './util'
 
 /** Guard rails so a broad request cannot return a document-sized payload. */
 const MAX_TREE_NODES = 2000
 const MAX_FIND_RESULTS = 500
+
+/** Figma rejects images larger than this on either axis. */
+const MAX_IMAGE_SIZE = 4096
 
 type Params = Record<string, unknown>
 type Handler = (params: Params) => unknown | Promise<unknown>
@@ -90,6 +93,48 @@ function tree(node: SceneNode, depth: number, includeHidden: boolean, budget: { 
     if (children.length > 0) entry.children = children
   }
   return entry
+}
+
+
+/**
+ * Where a newly created layer goes: inside `parentId` when one is given, on the
+ * current page otherwise. Position is set after appending, so x/y always mean
+ * "relative to the parent" — which is what a caller laying out a frame expects.
+ */
+async function place(node: SceneNode, params: Params): Promise<void> {
+  const parentId = str(params, 'parentId')
+  if (parentId) {
+    const parent = await figma.getNodeByIdAsync(parentId)
+    if (!parent) throw new Error(`No layer with id ${parentId}.`)
+    if (!('appendChild' in parent)) throw new Error(`"${parent.name}" cannot hold children.`)
+    ;(parent as ChildrenMixin & BaseNode).appendChild(node)
+  } else {
+    figma.currentPage.appendChild(node)
+  }
+
+  if ('x' in params) node.x = num(params, 'x', 0)
+  if ('y' in params) node.y = num(params, 'y', 0)
+  if (typeof params.name === 'string') node.name = params.name
+}
+
+function paint(params: Params, key: string): SolidPaint[] | null {
+  const hex = str(params, key)
+  return hex ? [{ type: 'SOLID', color: hexToRgb(hex) }] : null
+}
+
+function created(node: SceneNode): NodeSummary & { parentId: string } {
+  return { ...summarize(node), parentId: node.parent?.id ?? '' }
+}
+
+function bytesOf(params: Params): Uint8Array {
+  const value = params.bytes
+  if (value instanceof Uint8Array) return value
+  // postMessage sometimes hands the sandbox a plain array-like clone.
+  if (Array.isArray(value)) return Uint8Array.from(value as number[])
+  if (value && typeof value === 'object' && 'length' in (value as ArrayLike<number>)) {
+    return Uint8Array.from(value as ArrayLike<number>)
+  }
+  throw new Error('The image bytes did not survive the trip to Figma.')
 }
 
 const handlers: Record<string, Handler> = {
@@ -220,6 +265,129 @@ const handlers: Record<string, Handler> = {
         base64: figma.base64Encode(file.bytes),
       })),
     }
+  },
+
+  create_frame: async (params) => {
+    const frame = figma.createFrame()
+    frame.name = str(params, 'name', 'Frame')
+    frame.resize(Math.max(1, num(params, 'width', 400)), Math.max(1, num(params, 'height', 300)))
+
+    const fill = paint(params, 'fill')
+    frame.fills = fill ?? [{ type: 'SOLID', color: { r: 1, g: 1, b: 1 } }]
+    if ('cornerRadius' in params) frame.cornerRadius = num(params, 'cornerRadius', 0)
+
+    const direction = str(params, 'layout').toUpperCase()
+    if (direction === 'HORIZONTAL' || direction === 'VERTICAL') {
+      frame.layoutMode = direction
+      frame.itemSpacing = num(params, 'gap', 0)
+      const padding = num(params, 'padding', 0)
+      frame.paddingLeft = padding
+      frame.paddingRight = padding
+      frame.paddingTop = padding
+      frame.paddingBottom = padding
+      // An explicit size is a request, so only grow on the axis left unset.
+      frame.primaryAxisSizingMode = 'FIXED'
+      frame.counterAxisSizingMode = 'FIXED'
+    }
+
+    await place(frame, params)
+    return created(frame)
+  },
+
+  create_text: async (params) => {
+    const family = str(params, 'fontFamily', 'Inter')
+    const style = str(params, 'fontStyle', 'Regular')
+    try {
+      await figma.loadFontAsync({ family, style })
+    } catch {
+      throw new Error(`Figma has no "${family} ${style}". Try a font already used in this document.`)
+    }
+
+    const text = figma.createText()
+    text.fontName = { family, style }
+    text.fontSize = Math.max(1, num(params, 'fontSize', 16))
+    text.characters = str(params, 'characters')
+
+    const width = num(params, 'width', 0)
+    if (width > 0) {
+      // Auto height only makes sense once the width is pinned.
+      text.textAutoResize = 'HEIGHT'
+      text.resize(width, text.height)
+    }
+
+    if ('lineHeight' in params) text.lineHeight = { value: num(params, 'lineHeight', 140), unit: 'PERCENT' }
+    const align = str(params, 'align').toUpperCase()
+    if (align === 'LEFT' || align === 'CENTER' || align === 'RIGHT' || align === 'JUSTIFIED') {
+      text.textAlignHorizontal = align
+    }
+
+    const fill = paint(params, 'color')
+    if (fill) text.fills = fill
+
+    await place(text, { name: str(params, 'characters').slice(0, 40) || 'Text', ...params })
+    return created(text)
+  },
+
+  create_rectangle: async (params) => {
+    const rect = figma.createRectangle()
+    rect.name = str(params, 'name', 'Rectangle')
+    rect.resize(Math.max(1, num(params, 'width', 100)), Math.max(1, num(params, 'height', 100)))
+    const fill = paint(params, 'fill')
+    if (fill) rect.fills = fill
+    if ('cornerRadius' in params) rect.cornerRadius = num(params, 'cornerRadius', 0)
+    await place(rect, params)
+    return created(rect)
+  },
+
+  place_image: async (params) => {
+    const image = figma.createImage(bytesOf(params))
+    const size = await image.getSizeAsync()
+    if (size.width > MAX_IMAGE_SIZE || size.height > MAX_IMAGE_SIZE) {
+      throw new Error(`Figma caps images at ${MAX_IMAGE_SIZE}px; this one is ${size.width}×${size.height}.`)
+    }
+
+    // Given only one dimension, the other follows the image's own proportions.
+    let width = num(params, 'width', 0)
+    let height = num(params, 'height', 0)
+    if (width <= 0 && height <= 0) {
+      width = size.width
+      height = size.height
+    } else if (width <= 0) {
+      width = (height * size.width) / size.height
+    } else if (height <= 0) {
+      height = (width * size.height) / size.width
+    }
+
+    const scaleMode = str(params, 'scaleMode', 'FILL').toUpperCase()
+    const rect = figma.createRectangle()
+    rect.name = str(params, 'name', 'Image')
+    rect.resize(Math.max(1, Math.round(width)), Math.max(1, Math.round(height)))
+    rect.fills = [
+      {
+        type: 'IMAGE',
+        imageHash: image.hash,
+        scaleMode: scaleMode === 'FIT' || scaleMode === 'CROP' || scaleMode === 'TILE' ? scaleMode : 'FILL',
+      },
+    ]
+    if ('cornerRadius' in params) rect.cornerRadius = num(params, 'cornerRadius', 0)
+
+    await place(rect, params)
+    return { ...created(rect), sourceWidth: size.width, sourceHeight: size.height }
+  },
+
+  set_text: async (params) => {
+    const [node] = await nodesById([str(params, 'nodeId')])
+    if (node.type !== 'TEXT') throw new Error(`"${node.name}" is a ${node.type.toLowerCase()}, not a text layer.`)
+    await loadFontsFor(node)
+    node.characters = str(params, 'characters')
+    return `Set the text of "${node.name}"`
+  },
+
+  delete_nodes: async (params) => {
+    const nodes = await nodesById(ids(params) ?? [])
+    const names = nodes.map((node) => node.name)
+    for (const node of nodes) node.remove()
+    return `Deleted ${names.length} layer${names.length === 1 ? '' : 's'}: ${names.join(', ')}`
   },
 
   prototype_steps: (params) => motion.sequenceFromPrototype(str(params, 'frameId')),

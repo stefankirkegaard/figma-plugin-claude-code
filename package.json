@@ -10,7 +10,7 @@
     "test": "node test/run.mjs",
     "test:video": "node test/video.mjs",
     "test:bridge": "node test/bridge.mjs",
-    "bridge": "node bridge/server.mjs"
+    "bridge": "node bridge/server.mjs --standalone"
   },
   "devDependencies": {
     "@figma/plugin-typings": "^1.101.0",

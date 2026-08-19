@@ -175,6 +175,17 @@ type UiCommand = (params: Record<string, unknown>) => Promise<unknown>
 
 const uiCommands: Record<string, UiCommand> = {
   render_motion: (params) => renderMotion(params),
+  // The sandbox has no base64 decoder, but the iframe does — so the bytes are
+  // unpacked here and handed over as a real Uint8Array.
+  place_image: (params) =>
+    callMain('place_image', { ...params, bytes: decodeBase64(String(params.base64 ?? '')) }),
+}
+
+function decodeBase64(value: string): Uint8Array {
+  const binary = atob(value)
+  const bytes = new Uint8Array(binary.length)
+  for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index)
+  return bytes
 }
 
 function pick<T>(params: Record<string, unknown>, key: string, fallback: T): T {

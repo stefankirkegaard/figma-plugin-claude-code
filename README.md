@@ -9,17 +9,35 @@ process on your own machine, so nothing about your document leaves it.
 
 ## Quick start
 
+On a machine that has never seen this before:
+
 ```bash
-npm install && npm run build
+git clone https://github.com/stefankirkegaard/figma-plugin-claude-code
+open figma-plugin-claude-code
 ```
 
-1. In the **Figma desktop app**: *Plugins → Development → Import plugin from
-   manifest…* and pick `manifest.json` from this folder. It is now in the
-   Plugins menu of every file you open.
-2. Run the plugin in any Figma file. It opens on the **Claude** tab and starts
-   looking for the bridge.
-3. Run `claude` in this folder. `.mcp.json` starts the bridge for you, the
-   panel's dot turns green, and Claude can read and edit the open document.
+Then **double-click `start.command`**. It updates the checkout, installs what is
+missing, rebuilds the plugin, puts the manifest path on your clipboard, and
+leaves the bridge running. Every time after that, double-clicking it is the
+whole routine — there is nothing to remember.
+
+The one manual step, once per machine: in the **Figma desktop app**, *Plugins →
+Development → Import plugin from manifest…* and paste the path it copied. The
+plugin is then in the Plugins menu of every file you open.
+
+Run it in any Figma file and the **Claude** tab connects to that window on its
+own. For Claude Code itself, run `claude` in this folder instead of
+`start.command` — `.mcp.json` starts the same bridge as a child process.
+
+<details>
+<summary>Doing it by hand</summary>
+
+```bash
+npm install
+npm run build
+npm run bridge     # or: claude
+```
+</details>
 
 Then just ask:
 
@@ -51,14 +69,29 @@ The plugin is an MCP server. With the panel open, Claude Code gets these tools:
 | `figma_set_auto_layout` | Direction, gap and padding across many frames |
 | `figma_replace_text` | Find and replace across every text layer |
 | `figma_select_similar` | Everything matching the selection's type and size |
+| `figma_create_frame` | A frame, optionally with auto layout, optionally inside another |
+| `figma_create_text` | A text layer — fixed width paragraph or auto-sizing line |
+| `figma_create_rectangle` | Backgrounds, dividers, colour blocks |
+| `figma_place_image` | A real image from a URL or a local file |
+| `figma_set_text` | Replace one text layer's content |
+| `figma_delete_nodes` | Clear layers out before rebuilding |
 | `figma_export` | PNG, JPG, SVG or PDF at any scales — written to `figma-exports/`, and PNGs come back inline so Claude can look at them |
 | `figma_render_motion` | Smart animate or a keyframe timeline, encoded as GIF, MP4 or a PNG sequence |
 | `figma_notify` | A toast inside Figma |
 
 Editing tools act on the current selection unless they are given `nodeIds`, in
 which case those layers are selected first — so you always see on canvas what
-Claude just touched. A Claude-driven render fills in the Motion tab as it runs
-and its file lands in the Downloads strip too.
+Claude just touched. Creation tools take a `parentId` and return the new layer's
+id, so a frame can be built and then filled in the same breath. A Claude-driven
+render fills in the Motion tab as it runs and its file lands in the Downloads
+strip too.
+
+Images are fetched by the bridge, not the plugin — the plugin's manifest allows
+nothing but loopback. That also means the bridge can reach any site, and since
+Figma reads only PNG, JPG and GIF, the fetch asks for exactly those: a CDN that
+would serve AVIF or WebP to a browser hands over a JPEG instead. Anything that
+still arrives in a format Figma cannot read is refused by name rather than
+failing somewhere inside Figma.
 
 #### Figma's own MCP server
 
@@ -228,6 +261,7 @@ is available.
 
 ```
 manifest.json          Figma plugin manifest
+start.command          double-click launcher: update, install, build, run
 .mcp.json              registers the bridge with Claude Code
 build.mjs              esbuild build; inlines JS + CSS into a single ui.html
 bridge/                the MCP server, plain Node — not part of the plugin bundle
@@ -236,7 +270,7 @@ bridge/                the MCP server, plain Node — not part of the plugin bun
   tools.mjs              tool definitions and their schemas
 src/shared/types.ts    message contracts shared by both sides
 src/main/              plugin sandbox: scene graph, exporting, the render engine
-  rpc.ts                 the commands the bridge can run
+  rpc.ts                 the commands the bridge can run, including creation
   motion.ts              smart-animate matching, timeline sampling, frame render
   pose.ts                easing curves and transform maths
 src/ui/                plugin iframe: panel UI and encoders
