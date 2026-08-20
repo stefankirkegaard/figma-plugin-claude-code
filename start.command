@@ -29,13 +29,43 @@ printf '%sFigma to Claude%s\n' "$bold" "$reset"
 printf '%s%s%s\n' "$dim" "$PWD" "$reset"
 
 step 'Checking Node'
-if ! command -v node >/dev/null 2>&1; then
-  # A double-clicked script gets a login shell without Homebrew on the PATH.
+
+# A double-clicked script gets a login shell without Homebrew on the PATH.
+add_brew_to_path() {
   for candidate in /opt/homebrew/bin /usr/local/bin; do
-    [ -x "$candidate/node" ] && export PATH="$candidate:$PATH"
+    [ -d "$candidate" ] || continue
+    case ":$PATH:" in
+      *":$candidate:"*) ;;
+      *) export PATH="$candidate:$PATH" ;;
+    esac
   done
+}
+
+command -v node >/dev/null 2>&1 || add_brew_to_path
+
+if ! command -v node >/dev/null 2>&1; then
+  warn 'Node is not installed.'
+  if command -v brew >/dev/null 2>&1; then
+    printf '\n   Install it now with %sbrew install node%s? [y/N] ' "$bold" "$reset"
+    read -r reply
+    case "$reply" in
+      [yY]|[yY][eE][sS])
+        step 'Installing Node'
+        brew install node 2>&1 | sed 's/^/   /' || die 'brew install node failed.'
+        add_brew_to_path
+        ;;
+      *)
+        die 'Node is required. Install it with: brew install node'
+        ;;
+    esac
+  else
+    warn 'Homebrew is not installed either, so Node cannot be installed automatically.'
+    warn 'Install Homebrew from https://brew.sh and run this again,'
+    die  'or install Node directly from https://nodejs.org.'
+  fi
 fi
-command -v node >/dev/null 2>&1 || die 'Node is not installed. Install it with: brew install node'
+
+command -v node >/dev/null 2>&1 || die 'Node installed but still not on PATH. Open a new Terminal and run this again.'
 printf 'node %s\n' "$(node -v)"
 
 step 'Updating'
