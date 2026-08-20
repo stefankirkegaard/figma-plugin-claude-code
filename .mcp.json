@@ -4,7 +4,9 @@
       "type": "stdio",
       "command": "node",
       "args": ["bridge/server.mjs"],
-      "env": {}
+      "env": {
+        "FIGMA_BRIDGE_PORT": "3056"
+      }
     }
   }
 }
