@@ -22,7 +22,7 @@ const LOOPBACK = ['127.0.0.1', '::1']
  * open. Requests are correlated by id; the panel answers each one exactly once.
  */
 export class Channel {
-  constructor({ port = 3055, log = () => {} } = {}) {
+  constructor({ port = 3056, log = () => {} } = {}) {
     this.port = port
     this.log = log
     this.servers = []

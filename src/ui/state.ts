@@ -60,7 +60,7 @@ export const state: AppState = {
   documentName: '',
   selection: { pageName: '', nodes: [] },
   bridgeState: 'connecting',
-  bridgePort: 3055,
+  bridgePort: 3056,
   bridgeError: null,
   bridgeLog: [],
   assets: [],

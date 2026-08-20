@@ -3,7 +3,7 @@
  * The bridge: an MCP server on stdio that relays commands to the Figma plugin
  * over a loopback WebSocket.
  *
- *   Claude Code ──stdio──► bridge ──ws://localhost:3055──► plugin panel ──► Figma
+ *   Claude Code ──stdio──► bridge ──ws://localhost:3056──► plugin panel ──► Figma
  *
  * Figma's plugin API only exists inside Figma, and a plugin cannot accept
  * incoming connections — so the panel dials out to this process and holds the
@@ -15,7 +15,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { Channel } from './channel.mjs'
 import { registerTools } from './tools.mjs'
 
-const port = Number(process.env.FIGMA_BRIDGE_PORT ?? 3055)
+const port = Number(process.env.FIGMA_BRIDGE_PORT ?? 3056)
 const outDir = path.resolve(process.env.FIGMA_BRIDGE_OUT_DIR ?? path.join(process.cwd(), 'figma-exports'))
 
 /** stdout carries the MCP protocol, so every log line goes to stderr. */
@@ -36,7 +36,7 @@ try {
     log(`cannot listen on port ${port}: ${error.message}`)
     log(
       error.code === 'EADDRINUSE'
-        ? `Another bridge is already running on ${port}. Close it, or set FIGMA_BRIDGE_PORT to 3056.`
+        ? `Another bridge is already running on ${port}. Close it, or set FIGMA_BRIDGE_PORT to 3057.`
         : 'The bridge cannot accept connections, so the plugin has nothing to connect to.',
     )
     process.exit(1)
